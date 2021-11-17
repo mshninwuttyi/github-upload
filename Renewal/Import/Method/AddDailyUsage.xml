@@ -1,0 +1,198 @@
+﻿<AML>
+ <Item type="Method" id="426C4C2E6E1A4B409D95E481100695A8" action="add">
+  <execution_allowed_to keyed_name="World" type="Identity">A73B655731924CD0B027E4F4D5FCC0A9</execution_allowed_to>
+  <method_code><![CDATA[/* *****************************************************************************
+            Description:  
+                Add Daily Usage Items 
+            ***************************************************************************** */
+
+            //WARNING: DO NOT FORGET TO DISABLE THIS IN A PRODUCTION ENVIRONMENT!!!
+            // if (System.Diagnostics.Debugger.Launch()) System.Diagnostics.Debugger.Break();
+
+            string MethodName = "AddDailyUsage";
+
+            Innovator myInnovator = getInnovator();
+            Item result = this; // default return value.
+
+            DataAccessLayer dataAccessLayer = new DataAccessLayer(myInnovator);
+            BusinessLogic businessLogic = new BusinessLogic(dataAccessLayer)
+            {
+                ControlledItem = this
+            };
+
+            Item resultItem = businessLogic.AddDailyUsage();
+            if (resultItem.isError())
+            {
+                result = myInnovator.newError(MethodName + " : " + resultItem.getErrorString());
+            }
+            return result;
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1034:NestedTypesShouldNotBeVisible")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")]
+        public class BusinessLogic
+        {
+            private readonly IDataAccessLayer dataAccessLayer;
+            public Item ControlledItem { get; set; }
+
+            public BusinessLogic(IDataAccessLayer dataAccessLayer)
+            {
+                this.dataAccessLayer = dataAccessLayer;
+            }
+
+            public Item AddDailyUsage()
+            {
+                Innovator myInnovator = ControlledItem.getInnovator();
+                var currentDate = DateTime.Today.ToString("yyyy-MM-dd") + "T00:00:00";
+                var addDailyUser = myInnovator.newItem();
+                var userName = "";
+
+                Item historyUsers = dataAccessLayer.GetDistinctHistoryUser(currentDate);
+                for (var i = 0; i < historyUsers.getItemCount(); i++)
+                {
+                    var history = historyUsers.getItemByIndex(i);
+                    var historyUserId = history.getProperty("created_by_id", "");
+                    var user = myInnovator.getItemById("User", historyUserId);
+                    if (user != null)
+                    {
+                        userName = user.getProperty("login_name", "");
+                    }
+                    
+                    var maxDate = "";
+                    var minDate = "";
+                    var historyDates = dataAccessLayer.GetTodayHistoryDate(currentDate, historyUserId);
+                    for (var j = 0; j < historyDates.getItemCount(); j++) 
+                    {
+                        var history_date = historyDates.getItemByIndex(j);
+                        var historyCreatedOn = history_date.getProperty("created_on", "");
+                        
+                        maxDate = new[] { maxDate, historyCreatedOn }.Max();
+                        minDate = new[] { minDate, historyCreatedOn }.Min();
+                        if (minDate == "")
+                        {
+                            minDate = historyCreatedOn;
+                        }
+                    }
+                    
+                    var d_max_date = DateTime.Parse(maxDate);
+                    var d_min_date = DateTime.Parse(minDate);
+                    
+                    maxDate = string.Format("{0:hh:mm:ss tt}", d_max_date);
+                    minDate = string.Format("{0:hh:mm:ss tt}", d_min_date);
+                
+                    addDailyUser = dataAccessLayer.AddDailyUser(currentDate, userName, minDate, maxDate);
+                }
+                return addDailyUser;
+            }
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1034:NestedTypesShouldNotBeVisible")]
+        public interface IDataAccessLayer
+        {
+            Item GetDistinctHistoryUser(string currentDate);
+            Item GetTodayHistoryDate(string currentDate, string historyUserId);
+            Item AddDailyUser(string currentDate, string userName, string minDate, string maxDate);
+            Innovator GetDestinationInnovator(Innovator SourceInnovator);
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Design", "CA1034:NestedTypesShouldNotBeVisible")]
+        public class DataAccessLayer : IDataAccessLayer
+        {
+            private readonly Innovator myInnovator;
+
+            internal DataAccessLayer(Innovator myInnovator)
+            {
+                this.myInnovator = myInnovator;
+            }
+            
+            public Item GetDistinctHistoryUser(string currentDate)
+            {
+                StringBuilder sb_history_user = new StringBuilder("");
+                sb_history_user.Append(" SELECT DISTINCT created_by_id");
+                sb_history_user.Append(" FROM innovator.History");
+                sb_history_user.Append(" WHERE datediff(day, created_on , '" + currentDate + "') = 0");
+                string sql_histor_user = sb_history_user.ToString();
+                Item history_users = myInnovator.applySQL(sql_histor_user);
+                if (history_users.isError()) {
+                    return myInnovator.newError("Error" + ":" + history_users.getErrorDetail());
+                }
+                return history_users;
+            }
+            
+            public Item GetTodayHistoryDate(string currentDate, string historyUserId)
+            {
+                Item history_dates = myInnovator.newItem("History", "get");
+                history_dates.setProperty("created_on", currentDate);
+                history_dates.setPropertyCondition("created_on", "gt");
+                history_dates.setProperty("created_by_id", historyUserId);
+                history_dates = history_dates.apply();
+                if (history_dates.isError()) {
+                    return myInnovator.newError("Error" + ":" + history_dates.getErrorDetail());
+                }
+                return history_dates;
+            }
+            
+            public Item AddDailyUser(string currentDate, string userName, string minDate, string maxDate)
+            {
+                Innovator innovator = myInnovator;
+                var dbName = myInnovator.getConnection().GetDatabaseName().ToUpper();
+                if (dbName == "KERUI")
+                {
+                    innovator = GetDestinationInnovator(myInnovator);
+                }
+                Item daily_user = innovator.newItem("Daily_Users", "add");
+                daily_user.setProperty("du_date", currentDate);
+                daily_user.setProperty("du_wefic_kerui", dbName);
+                daily_user.setProperty("du_user_name", userName);
+                daily_user.setProperty("du_start_time", minDate);
+                daily_user.setProperty("du_end_time", maxDate);
+                daily_user = daily_user.apply();
+                if (daily_user.isError()) {
+                    return innovator.newError("Error" + ":" + daily_user.getErrorDetail());
+                }
+                return daily_user;
+            }
+            
+            public Innovator GetDestinationInnovator(Innovator SourceInnovator) 
+            {
+                HttpServerConnection myConnection;
+                Innovator myNewInnovator;
+                string newServerURL = "";
+                string newServerDBName = "";
+                string newServerUserName = "";
+                string newServerPassword = "";
+                Item urlVar = SourceInnovator.newItem("VARIABLE", "get");
+                urlVar.setProperty("name", "NewServerURL");
+                urlVar = urlVar.apply();
+                newServerURL = urlVar.getProperty("value");
+                Item dbVar = SourceInnovator.newItem("VARIABLE", "get");
+                dbVar.setProperty("name", "NewServerDBName");
+                dbVar = dbVar.apply();
+                newServerDBName = dbVar.getProperty("value");
+                Item userVar = SourceInnovator.newItem("VARIABLE", "get");
+                userVar.setProperty("name", "NewServerUserName");
+                userVar = userVar.apply();
+                newServerUserName = userVar.getProperty("value");
+        
+                Item passVar = SourceInnovator.newItem("VARIABLE", "get");
+                passVar.setProperty("name", "NewServerPassword");
+                passVar = passVar.apply();
+                newServerPassword = passVar.getProperty("value");
+        
+                /*End Get Data From Variable*/
+                string webURL = newServerURL;
+                string dbName = newServerDBName;
+                string userName = newServerUserName;
+                string passWord = newServerPassword;
+                myConnection = IomFactory.CreateHttpServerConnection(webURL, dbName, userName, passWord);
+                Item login_result = myConnection.Login();
+                if (login_result.isError()) {
+                    throw (new Exception("The system cannot get connection to Destination Aras."));
+                }
+                myNewInnovator = IomFactory.CreateInnovator(myConnection);
+                return myNewInnovator;
+            }]]></method_code>
+  <method_type>C#</method_type>
+  <name>AddDailyUsage</name>
+ </Item>
+</AML>
